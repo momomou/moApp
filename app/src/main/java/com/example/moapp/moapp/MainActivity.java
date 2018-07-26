@@ -8,6 +8,7 @@ import android.os.Looper;
 import android.support.annotation.NonNull;
 import android.support.design.widget.BottomNavigationView;
 import android.support.v7.app.AppCompatActivity;
+import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.view.MenuItem;
 import android.widget.Button;
@@ -23,6 +24,15 @@ import android.net.NetworkCapabilities;
 import android.net.LinkProperties;
 import android.net.Network;
 
+import android.app.usage.NetworkStatsManager;
+import android.app.usage.NetworkStats;
+
+import android.provider.Settings;
+import android.content.Intent;
+import android.os.RemoteException;
+import android.app.AppOpsManager;
+import android.os.Process;
+
 import android.os.HandlerThread;
 import android.os.Message;
 
@@ -33,7 +43,9 @@ public class MainActivity extends AppCompatActivity {
     private static final Boolean LOG_ON_UI = false;
 
     private TextView mTextMessage;
+    private TextView mTextMessage2;
     private Button mBtn;
+    private Button mBtn2;
 
     private Context mCtx;
     private static ConnectivityManager mCM;
@@ -44,27 +56,10 @@ public class MainActivity extends AppCompatActivity {
 
     private Handler mMainHandler;
 
+    private static TelephonyManager mTM;
+    private static NetworkStatsManager mNSM;
+
     private int cnt = 0;
-
-    private BottomNavigationView.OnNavigationItemSelectedListener mOnNavigationItemSelectedListener
-            = new BottomNavigationView.OnNavigationItemSelectedListener() {
-
-        @Override
-        public boolean onNavigationItemSelected(@NonNull MenuItem item) {
-            switch (item.getItemId()) {
-                case R.id.navigation_home:
-                    mTextMessage.setText(R.string.title_home);
-                    return true;
-                case R.id.navigation_dashboard:
-                    mTextMessage.setText(R.string.title_dashboard);
-                    return true;
-                case R.id.navigation_notifications:
-                    mTextMessage.setText(R.string.title_notifications);
-                    return true;
-            }
-            return false;
-        }
-    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,16 +67,21 @@ public class MainActivity extends AppCompatActivity {
         myLog(TAG, "onCreate");
         setContentView(R.layout.activity_main);
 
-
         mTextMessage = (TextView) findViewById(R.id.txv1);
         mTextMessage.setMovementMethod(new ScrollingMovementMethod());
-        BottomNavigationView navigation = (BottomNavigationView) findViewById(R.id.navigation);
-        //navigation.setOnNavigationItemSelectedListener(mOnNavigationItemSelectedListener);
+
+        mTextMessage2 = (TextView) findViewById(R.id.txv2);
+        mTextMessage2.setMovementMethod(new ScrollingMovementMethod());
 
         mBtn = (Button) findViewById(R.id.btn1);
         mBtn.setOnClickListener(onClickToGetNetwork);
 
+        mBtn2 = (Button) findViewById(R.id.btn2);
+        mBtn2.setOnClickListener(onClickToGetStatistics);
+
         mCM = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        mTM = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+        mNSM = (NetworkStatsManager) getSystemService(Context.NETWORK_STATS_SERVICE);
 
         mNetworkCallback = new NetworkCallbackImpl();
         NetworkRequest.Builder builder = new NetworkRequest.Builder();
@@ -168,7 +168,9 @@ public class MainActivity extends AppCompatActivity {
             sb.append("Network ").append(nw.toString()).append("\n");
 
             StringBuilder networkInfo = sb.append("NetworkInfo").append("\n").
-                    append("  DetailedState: ").append(ni.getDetailedState()).append("\n");
+                    append("  DetailedState: ").append(ni.getDetailedState()).append("\n").
+                    append("  Subtype: ").append(ni.getSubtype()).append("\n").
+                    append("  SubtypeName: ").append(ni.getSubtypeName()).append("\n");
 
             /*
             sb.append("NetworkCapabilities").append("\n").
@@ -197,6 +199,36 @@ public class MainActivity extends AppCompatActivity {
         Message msg = Message.obtain(mMainHandler);
         msg.obj = sb.toString();
         msg.sendToTarget();
+    }
+
+    public void GetStatistics() {
+        try {
+            NetworkStats ns = mNSM.querySummary(ConnectivityManager.TYPE_WIFI, "", 0, System.currentTimeMillis());
+            NetworkStats.Bucket bucket = new NetworkStats.Bucket();
+            if (!checkForPermission()) {
+                startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+            }
+            do {
+                ns.getNextBucket(bucket);
+                StringBuilder sb = new StringBuilder();
+                sb.append(",NetworkStatus:").append(bucket.getDefaultNetworkStatus()).
+                        append(",StartTime:").append(bucket.getStartTimeStamp()).
+                        append(",EndTime:").append(bucket.getEndTimeStamp()).
+                        append(",Rx:").append(bucket.getRxBytes()).
+                        append(",Tx:").append(bucket.getTxBytes()).
+                        append(",tag:").append(bucket.getTag()).
+                        append(",uid:").append(bucket.getUid());
+                myLog(TAG, sb.toString());
+            } while (ns.hasNextBucket());
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private boolean checkForPermission() {
+        AppOpsManager appOps = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
+        int mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getPackageName());
+        return mode == AppOpsManager.MODE_ALLOWED;
     }
 
     private class NetworkCallbackImpl extends ConnectivityManager.NetworkCallback {
@@ -233,6 +265,14 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void onClick(View v) {
             ShowNetworkInformation();
+            //updateUI();
+        }
+    };
+
+    private View.OnClickListener onClickToGetStatistics = new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            GetStatistics();
             //updateUI();
         }
     };
