@@ -38,19 +38,29 @@ import android.os.Message;
 
 import java.net.InetAddress;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.net.UnknownHostException;
+
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "yumike";
     private static final Boolean LOG_ON_UI = false;
+
+    private static final int MSG_TYPE_NETWORK = 1;
+    private static final int MSG_TYPE_STATISTICS = 2;
+    private static final int MSG_TYPE_DNS = 3;
 
     private TextView mTextMessage;
     private TextView mTextMessage2;
     private Button mBtn;
     private Button mBtn2;
+    private Button mBtn3;
 
     private Context mCtx;
     private static ConnectivityManager mCM;
     private static ConnectivityManager.NetworkCallback mNetworkCallback;
     private static ConnectivityManager.NetworkCallback mNetworkCallback2;
+    private static NetworkStatsManager.UsageCallback mNetworkStatsCallback;
     private HandlerThread mHandlerThread;
     private Handler mHandler;
 
@@ -79,6 +89,9 @@ public class MainActivity extends AppCompatActivity {
         mBtn2 = (Button) findViewById(R.id.btn2);
         mBtn2.setOnClickListener(onClickToGetStatistics);
 
+        mBtn3 = (Button) findViewById(R.id.btn3);
+        mBtn3.setOnClickListener(onClickToQueryDns);
+
         mCM = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
         mTM = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
         mNSM = (NetworkStatsManager) getSystemService(Context.NETWORK_STATS_SERVICE);
@@ -87,6 +100,10 @@ public class MainActivity extends AppCompatActivity {
         NetworkRequest.Builder builder = new NetworkRequest.Builder();
         NetworkRequest request = builder.build();
         mCM.registerNetworkCallback(request, mNetworkCallback);
+
+        mNetworkStatsCallback = new NetworkStatsCallbackImpl();
+        mNSM.registerUsageCallback(ConnectivityManager.TYPE_WIFI, "",
+                100, mNetworkStatsCallback);
 
         mHandlerThread = new HandlerThread("myHandlerThread");
         mHandlerThread.start();
@@ -112,7 +129,17 @@ public class MainActivity extends AppCompatActivity {
             public void handleMessage(Message msg) {
                 String str = (String) msg.obj;
                 myLog(TAG, "setText " + str);
-                mTextMessage.setText(str);
+                switch (msg.what) {
+                    case MSG_TYPE_NETWORK:
+                        mTextMessage.setText(str);
+                        break;
+                    case MSG_TYPE_STATISTICS:
+                        mTextMessage2.setText(str);
+                        break;
+                    case MSG_TYPE_DNS:
+                        break;
+                }
+
             }
         };
 
@@ -153,13 +180,12 @@ public class MainActivity extends AppCompatActivity {
             myLog(TAG, lp != null? lp.toString() : "null");
             myLog(TAG, nc != null? nc.toString() : "null");
         }
-        updateUI();
+        updateUI(MSG_TYPE_NETWORK);
     }
 
-    public void updateUI() {
+    public String dumpNetwork() {
         Network[] networks = mCM.getAllNetworks();
         StringBuilder sb = new StringBuilder();
-
         for (Network nw : networks) {
             NetworkInfo ni = mCM.getNetworkInfo(nw);
             LinkProperties lp = mCM.getLinkProperties(nw);
@@ -195,13 +221,42 @@ public class MainActivity extends AppCompatActivity {
 
             sb.append("\n");
         }
+        return sb.toString();
+    }
+
+    public void updateUI(int msgType) {
+        String str = null;
+        switch (msgType) {
+            case MSG_TYPE_NETWORK:
+                str = dumpNetwork();
+                break;
+            case MSG_TYPE_STATISTICS:
+                break;
+            case MSG_TYPE_DNS:
+                break;
+        }
 
         Message msg = Message.obtain(mMainHandler);
-        msg.obj = sb.toString();
+        msg.obj = str;
+        msg.what = msgType;
         msg.sendToTarget();
     }
 
-    public void GetStatistics() {
+    public String dumpBucket(NetworkStats.Bucket bucket) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(",NetworkStatus:").append(bucket.getDefaultNetworkStatus()).
+                append(",StartTime:").append(bucket.getStartTimeStamp()).
+                append(",EndTime:").append(bucket.getEndTimeStamp()).
+                append(",Rx:").append(bucket.getRxBytes()).
+                append(",Tx:").append(bucket.getTxBytes()).
+                append(",tag:").append(bucket.getTag()).
+                append(",uid:").append(bucket.getUid()).append(" ").
+                append(",state:").append(bucket.getState());
+        return sb.toString();
+    }
+
+    public void QuerySummary() {
+        myLog(TAG, "Starting QuerySummary");
         try {
             NetworkStats ns = mNSM.querySummary(ConnectivityManager.TYPE_WIFI, "", 0, System.currentTimeMillis());
             NetworkStats.Bucket bucket = new NetworkStats.Bucket();
@@ -210,19 +265,85 @@ public class MainActivity extends AppCompatActivity {
             }
             do {
                 ns.getNextBucket(bucket);
-                StringBuilder sb = new StringBuilder();
-                sb.append(",NetworkStatus:").append(bucket.getDefaultNetworkStatus()).
-                        append(",StartTime:").append(bucket.getStartTimeStamp()).
-                        append(",EndTime:").append(bucket.getEndTimeStamp()).
-                        append(",Rx:").append(bucket.getRxBytes()).
-                        append(",Tx:").append(bucket.getTxBytes()).
-                        append(",tag:").append(bucket.getTag()).
-                        append(",uid:").append(bucket.getUid());
-                myLog(TAG, sb.toString());
+                myLog(TAG, dumpBucket(bucket));
             } while (ns.hasNextBucket());
         } catch (RemoteException e) {
             e.printStackTrace();
         }
+    }
+
+    public void QuerySummaryForDevice() {
+        myLog(TAG, "Starting QuerySummaryForDevice");
+        try {
+            NetworkStats.Bucket bucket = mNSM.querySummaryForDevice(ConnectivityManager.TYPE_WIFI, "", 0, System.currentTimeMillis());
+            if (!checkForPermission()) {
+                startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+            }
+            do {
+                myLog(TAG, dumpBucket(bucket));
+            } while (false);
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+    public void QuerySummaryForUser() {
+        myLog(TAG, "Starting QuerySummaryForUser");
+        try {
+            NetworkStats.Bucket bucket = mNSM.querySummaryForUser(ConnectivityManager.TYPE_WIFI, "", 0, System.currentTimeMillis());
+            if (!checkForPermission()) {
+                startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+            }
+            do {
+                myLog(TAG, dumpBucket(bucket));
+            } while (false);
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void QueryDetails() {
+        myLog(TAG, "Starting QueryDetails");
+        try {
+            NetworkStats ns = mNSM.queryDetails(ConnectivityManager.TYPE_WIFI, "", 0, System.currentTimeMillis());
+            NetworkStats.Bucket bucket = new NetworkStats.Bucket();
+            if (!checkForPermission()) {
+                startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+            }
+            do {
+                ns.getNextBucket(bucket);
+                myLog(TAG, dumpBucket(bucket));
+            } while (ns.hasNextBucket());
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void QueryDetailsForUid() {
+        myLog(TAG, "Starting QueryDetailsForUid");
+        NetworkStats ns = mNSM.queryDetailsForUid(ConnectivityManager.TYPE_WIFI, "", 0, System.currentTimeMillis(), 10105);
+        NetworkStats.Bucket bucket = new NetworkStats.Bucket();
+        if (!checkForPermission()) {
+            startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+        }
+        do {
+            ns.getNextBucket(bucket);
+            myLog(TAG, dumpBucket(bucket));
+        } while (ns.hasNextBucket());
+    }
+
+    public void QueryDetailsForUidTag() {
+        myLog(TAG, "Starting QueryDetailsForUidTag");
+        NetworkStats ns = mNSM.queryDetailsForUidTag(ConnectivityManager.TYPE_WIFI, "", 0, System.currentTimeMillis(), 10105, NetworkStats.Bucket.TAG_NONE);
+        NetworkStats.Bucket bucket = new NetworkStats.Bucket();
+        if (!checkForPermission()) {
+            startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+        }
+        do {
+            ns.getNextBucket(bucket);
+            myLog(TAG, dumpBucket(bucket));
+        } while (ns.hasNextBucket());
     }
 
     private boolean checkForPermission() {
@@ -261,6 +382,13 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private class NetworkStatsCallbackImpl extends NetworkStatsManager.UsageCallback {
+        @Override
+        public void onThresholdReached(int i, String s) {
+            myLog(TAG, "onThresholdReached: " + i + ", " + s);
+        }
+    }
+
     private View.OnClickListener onClickToGetNetwork = new View.OnClickListener() {
         @Override
         public void onClick(View v) {
@@ -272,9 +400,34 @@ public class MainActivity extends AppCompatActivity {
     private View.OnClickListener onClickToGetStatistics = new View.OnClickListener() {
         @Override
         public void onClick(View v) {
-            GetStatistics();
+            QuerySummary();
+            QuerySummaryForDevice();
+            QuerySummaryForUser();
+            QueryDetails();
+            QueryDetailsForUid();
+            QueryDetailsForUidTag();
             //updateUI();
         }
     };
 
+
+    private View.OnClickListener onClickToQueryDns = new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            Thread thread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        InetAddress[] addresses = InetAddress.getAllByName("google.com");
+                        for (InetAddress addr : addresses) {
+                            myLog(TAG, addr.toString());
+                        }
+                    } catch (UnknownHostException e) {
+                        e.printStackTrace();
+                    }
+                }
+            });
+            thread.start();
+        }
+    };
 }
